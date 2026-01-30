@@ -29,8 +29,8 @@ class CardRenamerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("存储卡重命名工具")
-        self.root.geometry("600x580")
-        self.root.resizable(False, False)
+        self.root.geometry("600x650")
+        self.root.resizable(False, True)  # 允许垂直方向调整窗口大小
         
         # 状态变量
         self.video_files = []
@@ -139,16 +139,20 @@ class CardRenamerApp:
                                      command=self.do_eject, width=18, state=tk.DISABLED)
         self.eject_btn.pack(side=tk.LEFT)
         
+        # ===== 可调整高度的面板容器 =====
+        paned = ttk.PanedWindow(main_frame, orient=tk.VERTICAL)
+        paned.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        
         # ===== 卷号历史表格 =====
-        history_frame = ttk.LabelFrame(main_frame, text="卷号历史记录", padding="8")
-        history_frame.pack(fill=tk.X, pady=(0, 8))
+        history_frame = ttk.LabelFrame(paned, text="卷号历史记录", padding="8")
+        paned.add(history_frame, weight=1)
         
         # 表格容器（带滚动条）
         table_container = ttk.Frame(history_frame)
-        table_container.pack(fill=tk.X)
+        table_container.pack(fill=tk.BOTH, expand=True)
         
         # Canvas + 滚动条
-        self.table_canvas = tk.Canvas(table_container, height=100, bg="white", 
+        self.table_canvas = tk.Canvas(table_container, height=80, bg="white", 
                                        highlightthickness=1, highlightbackground="#ddd")
         
         # 垂直滚动条
@@ -161,7 +165,7 @@ class CardRenamerApp:
         self.table_canvas.configure(yscrollcommand=v_scrollbar.set, 
                                      xscrollcommand=h_scrollbar.set)
         
-        self.table_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.table_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         h_scrollbar.pack(fill=tk.X)
         
@@ -181,8 +185,8 @@ class CardRenamerApp:
         self.history_count_label.pack(side=tk.LEFT)
         
         # ===== 工作日志 =====
-        progress_frame = ttk.LabelFrame(main_frame, text="工作日志", padding="8")
-        progress_frame.pack(fill=tk.X, pady=(0, 8))
+        progress_frame = ttk.LabelFrame(paned, text="工作日志", padding="8")
+        paned.add(progress_frame, weight=1)
         
         status_row = ttk.Frame(progress_frame)
         status_row.pack(fill=tk.X, pady=(0, 5))
@@ -193,23 +197,31 @@ class CardRenamerApp:
         self.progress_bar = ttk.Progressbar(status_row, mode='indeterminate', length=150)
         self.progress_bar.pack(side=tk.RIGHT)
         
-        # 固定高度100px的日志容器
-        log_container = tk.Frame(progress_frame, height=100)
-        log_container.pack(fill=tk.X)
-        log_container.pack_propagate(False)  # 防止子控件改变容器大小
+        # 日志容器（可拖动调整高度）
+        log_container = ttk.Frame(progress_frame)
+        log_container.pack(fill=tk.BOTH, expand=True)
         
         self.log_text = tk.Text(log_container, state=tk.DISABLED, 
                                  font=("Monaco", 10), bg="#1e1e1e", fg="#d4d4d4",
-                                 insertbackground="white")
+                                 insertbackground="white", wrap=tk.WORD, height=6)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        scrollbar = ttk.Scrollbar(log_container, command=self.log_text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.log_text.config(yscrollcommand=scrollbar.set)
+        log_scrollbar = ttk.Scrollbar(log_container, orient=tk.VERTICAL, 
+                                       command=self.log_text.yview)
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.config(yscrollcommand=log_scrollbar.set)
+        
+        # 绑定鼠标滚轮事件
+        self.log_text.bind('<MouseWheel>', self._on_log_scroll)
+        self.log_text.bind('<Enter>', lambda e: self.log_text.focus_set())
     
     def _on_canvas_scroll(self, event):
         """处理Canvas鼠标滚轮事件"""
         self.table_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    
+    def _on_log_scroll(self, event):
+        """处理日志区域鼠标滚轮事件"""
+        self.log_text.yview_scroll(int(-1 * (event.delta / 120)), "units")
     
     def update_history_table(self):
         """更新卷号历史表格"""

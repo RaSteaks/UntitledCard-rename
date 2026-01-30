@@ -7,9 +7,9 @@
 - 自动扫描存储卡中的视频素材文件
 - 支持多种视频格式：MXF, MOV, MP4, R3D, ARI, BRAW
 - 从文件名中提取卷号（如 `A001C001_200101B6.MXF` → `A001`）
+- 卷号历史记录与重复检测
 - 一键重命名存储卡
 - 安全推出存储卡
-- 跨平台支持：macOS / Windows
 
 ## 支持的文件命名格式
 
@@ -31,8 +31,7 @@ python3 rename_card.py
 
 ### 方式二：运行打包后的应用程序
 
-- **macOS**: 双击 `存储卡重命名工具.app`
-- **Windows**: 双击 `存储卡重命名工具.exe`
+双击 `存储卡重命名工具.app`
 
 ## 操作流程
 
@@ -61,23 +60,13 @@ pyinstaller --onefile --windowed --name "存储卡重命名工具" rename_card.p
 
 生成的应用位于 `dist/存储卡重命名工具.app`
 
-### Windows 构建
-
-```cmd
-pyinstaller --onefile --windowed --name "存储卡重命名工具" rename_card.py
-```
-
-生成的应用位于 `dist\存储卡重命名工具.exe`
-
 ## 系统要求
 
 - **macOS**: macOS 10.14 或更高版本
-- **Windows**: Windows 10 或更高版本
 - **Python**: 3.7 或更高版本（仅源码运行需要）
 
 ## 注意事项
 
-- Windows 上重命名需要管理员权限
 - 确保存储卡未被其他程序占用
 - 重命名后存储卡会保持挂载状态
 
