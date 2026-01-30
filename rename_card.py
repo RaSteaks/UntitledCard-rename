@@ -5,6 +5,7 @@
 支持 macOS 和 Windows
 """
 
+import json
 import os
 import re
 import subprocess
@@ -17,6 +18,9 @@ from pathlib import Path
 # 检测操作系统
 IS_MACOS = sys.platform == 'darwin'
 IS_WINDOWS = sys.platform == 'win32'
+
+# 配置文件路径
+CONFIG_FILE = Path.home() / '.card_renamer_config.json'
 
 
 class CardRenamerApp:
@@ -32,6 +36,7 @@ class CardRenamerApp:
         self.selected_volume = tk.StringVar()
         self.selected_reel = tk.StringVar()
         self.volume_paths = {}  # 存储卷名到路径的映射
+        self.last_reel = self.load_last_reel()  # 上一个修改的卷号
         
         self.setup_ui()
         self.refresh_volumes()
@@ -70,6 +75,11 @@ class CardRenamerApp:
         self.reel_combo = ttk.Combobox(reel_frame, textvariable=self.selected_reel, 
                                         state="readonly", width=10)
         self.reel_combo.pack(side=tk.LEFT)
+        
+        # 上一个修改的卷号
+        ttk.Label(reel_frame, text="上一个修改的卷号:").pack(side=tk.LEFT, padx=(15, 5))
+        self.last_reel_label = ttk.Label(reel_frame, text=self.last_reel or "无")
+        self.last_reel_label.pack(side=tk.LEFT)
         
         # 进度显示区域
         progress_frame = ttk.LabelFrame(main_frame, text="工作进度", padding="5")
@@ -119,6 +129,27 @@ class CardRenamerApp:
         self.log_text.config(state=tk.NORMAL)
         self.log_text.delete(1.0, tk.END)
         self.log_text.config(state=tk.DISABLED)
+    
+    def load_last_reel(self):
+        """从配置文件加载上一个修改的卷号"""
+        try:
+            if CONFIG_FILE.exists():
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get('last_reel', '')
+        except Exception:
+            pass
+        return ''
+    
+    def save_last_reel(self, reel):
+        """保存上一个修改的卷号到配置文件"""
+        try:
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'last_reel': reel}, f)
+            self.last_reel = reel
+            self.last_reel_label.config(text=reel)
+        except Exception:
+            pass
     
     def get_removable_drives_windows(self):
         """获取Windows上的可移动驱动器"""
@@ -315,6 +346,7 @@ class CardRenamerApp:
             
             if success:
                 self.log("重命名成功!")
+                self.save_last_reel(new_name)
                 self.refresh_volumes()
                 messagebox.showinfo("成功", f"存储卡已重命名为 '{new_name}'")
             else:
