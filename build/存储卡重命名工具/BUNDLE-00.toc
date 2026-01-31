@@ -1,3 +1,3 @@
 ([('存储卡重命名工具',
-   '/Users/rasteaks/Desktop/个人/UntitledCard_Rename/dist/存储卡重命名工具',
+   '/Users/rasteaks/Desktop/个人/UntitledCard-rename/dist/存储卡重命名工具',
    'EXECUTABLE')],)

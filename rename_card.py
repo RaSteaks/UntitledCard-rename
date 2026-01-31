@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.13
 """
 存储卡重命名工具 - macOS版本
 读取外置存储卡，分析视频素材文件名，提取卷号并重命名存储卡
@@ -11,12 +11,12 @@ import subprocess
 import threading
 import queue
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
 from collections import defaultdict
 
-# 配置文件路径
-CONFIG_FILE = Path.home() / '.card_renamer_config.json'
+# 默认配置文件路径（存储用户设置的自定义路径）
+DEFAULT_CONFIG_FILE = Path.home() / '.card_renamer_settings.json'
 
 # 视频文件扩展名
 VIDEO_EXTENSIONS = {'.mxf', '.mov', '.mp4', '.r3d', '.ari', '.braw'}
@@ -31,6 +31,10 @@ class CardRenamerApp:
         self.root.title("存储卡重命名工具")
         self.root.geometry("600x650")
         self.root.resizable(False, True)  # 允许垂直方向调整窗口大小
+        
+        # 加载用户设置（包含自定义配置文件路径）
+        self.settings = self.load_settings()
+        self.config_file = Path(self.settings.get('config_path', str(Path.home() / '.card_renamer_config.json')))
         
         # 状态变量
         self.video_files = []
@@ -173,13 +177,17 @@ class CardRenamerApp:
         self.table_canvas.bind('<MouseWheel>', self._on_canvas_scroll)
         self.table_canvas.bind('<Enter>', lambda e: self.table_canvas.focus_set())
         
-        # 清除历史按钮
+        # 清除历史按钮和设置按钮
         btn_frame = ttk.Frame(history_frame)
         btn_frame.pack(fill=tk.X, pady=(5, 0))
         
         self.clear_history_btn = ttk.Button(btn_frame, text="清除历史", 
                                              command=self.clear_history, width=10)
         self.clear_history_btn.pack(side=tk.RIGHT)
+        
+        self.config_path_btn = ttk.Button(btn_frame, text="设置路径", 
+                                           command=self.choose_config_path, width=10)
+        self.config_path_btn.pack(side=tk.RIGHT, padx=(0, 5))
         
         self.history_count_label = ttk.Label(btn_frame, text="共 0 个卷号")
         self.history_count_label.pack(side=tk.LEFT)
@@ -362,8 +370,8 @@ class CardRenamerApp:
     def load_config(self):
         """加载配置"""
         try:
-            if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            if self.config_file.exists():
+                with open(self.config_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
         except Exception:
             pass
@@ -372,12 +380,63 @@ class CardRenamerApp:
     def save_config(self):
         """保存配置"""
         try:
+            # 确保目标目录存在
+            self.config_file.parent.mkdir(parents=True, exist_ok=True)
             self.config['last_reel'] = self.last_reel
             self.config['reel_history'] = list(self.reel_history)
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.log(f"保存配置失败: {e}")
+    
+    def load_settings(self):
+        """加载用户设置（包含自定义配置文件路径）"""
+        try:
+            if DEFAULT_CONFIG_FILE.exists():
+                with open(DEFAULT_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
         except Exception:
             pass
+        return {}
+    
+    def save_settings(self):
+        """保存用户设置"""
+        try:
+            self.settings['config_path'] = str(self.config_file)
+            with open(DEFAULT_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.settings, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    
+    def choose_config_path(self):
+        """选择配置文件保存位置"""
+        folder = filedialog.askdirectory(
+            title="选择配置文件保存位置",
+            initialdir=str(self.config_file.parent)
+        )
+        if folder:
+            new_config_file = Path(folder) / 'card_renamer_config.json'
+            
+            # 如果旧配置文件存在，询问是否迁移数据
+            if self.config_file.exists() and self.config_file != new_config_file:
+                if messagebox.askyesno("迁移数据", 
+                    f"是否将现有配置数据迁移到新位置？\n\n新位置: {new_config_file}"):
+                    try:
+                        # 复制数据到新位置
+                        new_config_file.parent.mkdir(parents=True, exist_ok=True)
+                        with open(self.config_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        with open(new_config_file, 'w', encoding='utf-8') as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2)
+                        self.log(f"配置已迁移到: {new_config_file}")
+                    except Exception as e:
+                        self.log(f"迁移失败: {e}")
+                        return
+            
+            self.config_file = new_config_file
+            self.save_settings()
+            self.log(f"配置文件路径已设置为: {self.config_file}")
+            messagebox.showinfo("成功", f"配置文件将保存到:\n{self.config_file}")
     
     def save_last_reel(self, reel):
         """保存上一个卷号"""
@@ -494,6 +553,9 @@ class CardRenamerApp:
         try:
             for root, _, files in os.walk(volume_path):
                 for file in files:
+                    # 跳过隐藏文件（以.开头的文件，如._开头的macOS资源文件）
+                    if file.startswith('.'):
+                        continue
                     if Path(file).suffix.lower() in VIDEO_EXTENSIONS:
                         self.video_files.append(file)
                         match = reel_pattern.match(file)
