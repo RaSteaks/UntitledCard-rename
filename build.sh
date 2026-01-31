@@ -9,8 +9,11 @@ if ! command -v pyinstaller &> /dev/null; then
     pip3 install pyinstaller
 fi
 
-# 打包为 macOS .app
-pyinstaller --onefile --windowed --name "存储卡重命名工具" rename_card.py
+# 清理旧的构建文件
+rm -rf build dist
+
+# 打包为 macOS .app（使用 onedir 模式）
+pyinstaller --windowed --name "存储卡重命名工具" rename_card.py
 
 echo "打包完成！"
 echo "应用位置: dist/存储卡重命名工具.app"
