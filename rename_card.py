@@ -14,12 +14,30 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
 from collections import defaultdict
+import xml.etree.ElementTree as ET
+import glob
 
 # 默认配置文件路径（存储用户设置的自定义路径）
 DEFAULT_CONFIG_FILE = Path.home() / '.card_renamer_settings.json'
 
 # 视频文件扩展名
 VIDEO_EXTENSIONS = {'.mxf', '.mov', '.mp4', '.r3d', '.ari', '.braw'}
+
+# 元数据文件扩展名和路径模式
+METADATA_FILES = {
+    # Sony XDCAM
+    'sony_xdcam': {'extensions': ['.xml'], 'paths': ['MEDIAPRO.XML', 'DISCMETA.XML', 'Clip/*/M01.XML']},
+    # ARRI
+    'arri': {'extensions': ['.ari'], 'paths': ['*.ari']},
+    # RED
+    'red': {'extensions': ['.RDC', '.RMD'], 'paths': ['*.RDC', '*.RMD']},
+    # Blackmagic RAW
+    'braw': {'extensions': ['.txt'], 'paths': ['*.txt']},
+    # Canon
+    'canon': {'extensions': ['.cif', '.xml'], 'paths': ['CANON/*/CLIPINFO.XML', '*.CIF']},
+    # Panasonic
+    'panasonic': {'extensions': ['.xml'], 'paths': ['CONTENTS/CLIP/*/CLIPINFO.XML']},
+}
 
 # 工作流程步骤
 STEPS = ['刷新', '分析', '重命名', '推出']
@@ -459,6 +477,81 @@ class CardRenamerApp:
             pass
         return None
     
+    def extract_reel_from_metadata(self, volume_path):
+        """从元数据文件中提取卷号"""
+        reel_numbers = set()
+        reel_pattern = re.compile(r'([A-Z]\d{3})')
+        
+        # 尝试Sony XDCAM元数据
+        sony_files = ['MEDIAPRO.XML', 'DISCMETA.XML']
+        for filename in sony_files:
+            filepath = volume_path / filename
+            if filepath.exists():
+                self.log(f"找到Sony元数据: {filename}")
+                try:
+                    tree = ET.parse(filepath)
+                    root = tree.getroot()
+                    # 尝试多个常见标签
+                    for tag in ['ReelName', 'ClipName', 'Title', 'Name']:
+                        for elem in root.iter(tag):
+                            if elem.text:
+                                match = reel_pattern.search(elem.text)
+                                if match:
+                                    reel_numbers.add(match.group(1))
+                                    self.log(f"从{tag}提取卷号: {match.group(1)}")
+                except Exception as e:
+                    self.log(f"解析{filename}错误: {e}")
+        
+        # 尝试Canon元数据
+        canon_patterns = list(volume_path.glob('CANON/*/CLIPINFO.XML'))
+        for filepath in canon_patterns:
+            self.log(f"找到Canon元数据: {filepath.name}")
+            try:
+                tree = ET.parse(filepath)
+                root = tree.getroot()
+                for tag in ['ReelName', 'ClipName']:
+                    for elem in root.iter(tag):
+                        if elem.text:
+                            match = reel_pattern.search(elem.text)
+                            if match:
+                                reel_numbers.add(match.group(1))
+                                self.log(f"从{tag}提取卷号: {match.group(1)}")
+            except Exception as e:
+                self.log(f"解析Canon元数据错误: {e}")
+        
+        # 尝试Panasonic元数据
+        panasonic_patterns = list(volume_path.glob('CONTENTS/CLIP/*/CLIPINFO.XML'))
+        for filepath in panasonic_patterns:
+            self.log(f"找到Panasonic元数据: {filepath.name}")
+            try:
+                tree = ET.parse(filepath)
+                root = tree.getroot()
+                for tag in ['ReelName', 'ClipName']:
+                    for elem in root.iter(tag):
+                        if elem.text:
+                            match = reel_pattern.search(elem.text)
+                            if match:
+                                reel_numbers.add(match.group(1))
+                                self.log(f"从{tag}提取卷号: {match.group(1)}")
+            except Exception as e:
+                self.log(f"解析Panasonic元数据错误: {e}")
+        
+        # 尝试RED元数据 (.RDC 文件)
+        red_files = list(volume_path.glob('*.RDC')) + list(volume_path.glob('*.RMD'))
+        for filepath in red_files:
+            self.log(f"找到RED元数据: {filepath.name}")
+            try:
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    matches = reel_pattern.findall(content)
+                    for match in matches:
+                        reel_numbers.add(match)
+                        self.log(f"从RED元数据提取卷号: {match}")
+            except Exception as e:
+                self.log(f"解析RED元数据错误: {e}")
+        
+        return reel_numbers
+    
     # ===== 步骤1: 刷新 =====
     def do_refresh(self):
         """刷新存储卷列表"""
@@ -550,6 +643,17 @@ class CardRenamerApp:
         reel_pattern = re.compile(r'^([A-Z]\d{3})')
         self.reel_numbers = set()
         
+        # 优先尝试从元数据文件提取卷号
+        self.log("正在扫描元数据文件...")
+        metadata_reels = self.extract_reel_from_metadata(volume_path)
+        if metadata_reels:
+            self.reel_numbers.update(metadata_reels)
+            self.log(f"从元数据提取到 {len(metadata_reels)} 个卷号")
+        else:
+            self.log("未找到元数据文件，将从文件名提取")
+        
+        # 扫描视频文件并从文件名提取卷号
+        self.log("正在扫描视频文件...")
         try:
             for root, _, files in os.walk(volume_path):
                 for file in files:
