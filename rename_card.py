@@ -15,32 +15,38 @@ from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
 from collections import defaultdict
 import xml.etree.ElementTree as ET
-import glob
 
-# 默认配置文件路径（存储用户设置的自定义路径）
+# 常量配置
 DEFAULT_CONFIG_FILE = Path.home() / '.card_renamer_settings.json'
 
 # 视频文件扩展名
 VIDEO_EXTENSIONS = {'.mxf', '.mov', '.mp4', '.r3d', '.ari', '.braw'}
-
-# 元数据文件扩展名和路径模式
-METADATA_FILES = {
-    # Sony XDCAM
-    'sony_xdcam': {'extensions': ['.xml'], 'paths': ['MEDIAPRO.XML', 'DISCMETA.XML', 'Clip/*/M01.XML']},
-    # ARRI
-    'arri': {'extensions': ['.ari'], 'paths': ['*.ari']},
-    # RED
-    'red': {'extensions': ['.RDC', '.RMD'], 'paths': ['*.RDC', '*.RMD']},
-    # Blackmagic RAW
-    'braw': {'extensions': ['.txt'], 'paths': ['*.txt']},
-    # Canon
-    'canon': {'extensions': ['.cif', '.xml'], 'paths': ['CANON/*/CLIPINFO.XML', '*.CIF']},
-    # Panasonic
-    'panasonic': {'extensions': ['.xml'], 'paths': ['CONTENTS/CLIP/*/CLIPINFO.XML']},
-}
-
-# 工作流程步骤
+REEL_PATTERN = re.compile(r'([A-Z]\d{3})')
 STEPS = ['刷新', '分析', '重命名', '推出']
+
+# 元数据配置
+METADATA_CONFIG = [
+    {
+        'name': 'Sony XDCAM',
+        'files': ['MEDIAPRO.XML', 'DISCMETA.XML'],
+        'tags': ['ReelName', 'ClipName', 'Title', 'Name']
+    },
+    {
+        'name': 'Canon',
+        'pattern': 'CANON/*/CLIPINFO.XML',
+        'tags': ['ReelName', 'ClipName']
+    },
+    {
+        'name': 'Panasonic',
+        'pattern': 'CONTENTS/CLIP/*/CLIPINFO.XML',
+        'tags': ['ReelName', 'ClipName']
+    },
+    {
+        'name': 'RED',
+        'pattern': '*.{RDC,RMD}',
+        'is_text': True
+    }
+]
 
 
 class CardRenamerApp:
@@ -385,46 +391,43 @@ class CardRenamerApp:
         self.log_text.delete(1.0, tk.END)
         self.log_text.config(state=tk.DISABLED)
     
-    def load_config(self):
-        """加载配置"""
+    def _load_json_file(self, filepath, default={}):
+        """加载JSON文件"""
         try:
-            if self.config_file.exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
+            if filepath.exists():
+                with open(filepath, 'r', encoding='utf-8') as f:
                     return json.load(f)
         except Exception:
             pass
-        return {}
+        return default.copy()
+    
+    def _save_json_file(self, filepath, data):
+        """保存JSON文件"""
+        try:
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.log(f"保存文件失败: {e}")
+    
+    def load_config(self):
+        """加载配置"""
+        return self._load_json_file(self.config_file)
     
     def save_config(self):
         """保存配置"""
-        try:
-            # 确保目标目录存在
-            self.config_file.parent.mkdir(parents=True, exist_ok=True)
-            self.config['last_reel'] = self.last_reel
-            self.config['reel_history'] = list(self.reel_history)
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            self.log(f"保存配置失败: {e}")
+        self.config['last_reel'] = self.last_reel
+        self.config['reel_history'] = list(self.reel_history)
+        self._save_json_file(self.config_file, self.config)
     
     def load_settings(self):
-        """加载用户设置（包含自定义配置文件路径）"""
-        try:
-            if DEFAULT_CONFIG_FILE.exists():
-                with open(DEFAULT_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except Exception:
-            pass
-        return {}
+        """加载用户设置"""
+        return self._load_json_file(DEFAULT_CONFIG_FILE)
     
     def save_settings(self):
         """保存用户设置"""
-        try:
-            self.settings['config_path'] = str(self.config_file)
-            with open(DEFAULT_CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        self.settings['config_path'] = str(self.config_file)
+        self._save_json_file(DEFAULT_CONFIG_FILE, self.settings)
     
     def choose_config_path(self):
         """选择配置文件保存位置"""
@@ -480,77 +483,79 @@ class CardRenamerApp:
     def extract_reel_from_metadata(self, volume_path):
         """从元数据文件中提取卷号"""
         reel_numbers = set()
-        reel_pattern = re.compile(r'([A-Z]\d{3})')
         
-        # 尝试Sony XDCAM元数据
-        sony_files = ['MEDIAPRO.XML', 'DISCMETA.XML']
-        for filename in sony_files:
-            filepath = volume_path / filename
-            if filepath.exists():
-                self.log(f"找到Sony元数据: {filename}")
-                try:
-                    tree = ET.parse(filepath)
-                    root = tree.getroot()
-                    # 尝试多个常见标签
-                    for tag in ['ReelName', 'ClipName', 'Title', 'Name']:
-                        for elem in root.iter(tag):
-                            if elem.text:
-                                match = reel_pattern.search(elem.text)
-                                if match:
-                                    reel_numbers.add(match.group(1))
-                                    self.log(f"从{tag}提取卷号: {match.group(1)}")
-                except Exception as e:
-                    self.log(f"解析{filename}错误: {e}")
-        
-        # 尝试Canon元数据
-        canon_patterns = list(volume_path.glob('CANON/*/CLIPINFO.XML'))
-        for filepath in canon_patterns:
-            self.log(f"找到Canon元数据: {filepath.name}")
-            try:
-                tree = ET.parse(filepath)
-                root = tree.getroot()
-                for tag in ['ReelName', 'ClipName']:
-                    for elem in root.iter(tag):
-                        if elem.text:
-                            match = reel_pattern.search(elem.text)
-                            if match:
-                                reel_numbers.add(match.group(1))
-                                self.log(f"从{tag}提取卷号: {match.group(1)}")
-            except Exception as e:
-                self.log(f"解析Canon元数据错误: {e}")
-        
-        # 尝试Panasonic元数据
-        panasonic_patterns = list(volume_path.glob('CONTENTS/CLIP/*/CLIPINFO.XML'))
-        for filepath in panasonic_patterns:
-            self.log(f"找到Panasonic元数据: {filepath.name}")
-            try:
-                tree = ET.parse(filepath)
-                root = tree.getroot()
-                for tag in ['ReelName', 'ClipName']:
-                    for elem in root.iter(tag):
-                        if elem.text:
-                            match = reel_pattern.search(elem.text)
-                            if match:
-                                reel_numbers.add(match.group(1))
-                                self.log(f"从{tag}提取卷号: {match.group(1)}")
-            except Exception as e:
-                self.log(f"解析Panasonic元数据错误: {e}")
-        
-        # 尝试RED元数据 (.RDC 文件)
-        red_files = list(volume_path.glob('*.RDC')) + list(volume_path.glob('*.RMD'))
-        for filepath in red_files:
-            self.log(f"找到RED元数据: {filepath.name}")
-            try:
-                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                    matches = reel_pattern.findall(content)
-                    for match in matches:
-                        reel_numbers.add(match)
-                        self.log(f"从RED元数据提取卷号: {match}")
-            except Exception as e:
-                self.log(f"解析RED元数据错误: {e}")
+        for config in METADATA_CONFIG:
+            # 处理指定文件名
+            if 'files' in config:
+                for filename in config['files']:
+                    filepath = volume_path / filename
+                    if filepath.exists():
+                        self.log(f"找到{config['name']}元数据: {filename}")
+                        reel_numbers.update(self._parse_xml_metadata(filepath, config['tags']))
+            
+            # 处理文件模式
+            elif 'pattern' in config:
+                files = list(volume_path.glob(config['pattern']))
+                for filepath in files:
+                    self.log(f"找到{config['name']}元数据: {filepath.name}")
+                    if config.get('is_text'):
+                        reel_numbers.update(self._parse_text_metadata(filepath))
+                    else:
+                        reel_numbers.update(self._parse_xml_metadata(filepath, config['tags']))
         
         return reel_numbers
+    
+    def _parse_xml_metadata(self, filepath, tags):
+        """解析XML元数据"""
+        reel_numbers = set()
+        try:
+            tree = ET.parse(filepath)
+            root = tree.getroot()
+            for tag in tags:
+                for elem in root.iter(tag):
+                    if elem.text:
+                        match = REEL_PATTERN.search(elem.text)
+                        if match:
+                            reel_numbers.add(match.group(1))
+                            self.log(f"从{tag}提取卷号: {match.group(1)}")
+        except Exception as e:
+            self.log(f"解析{filepath.name}错误: {e}")
+        return reel_numbers
+    
+    def _parse_text_metadata(self, filepath):
+        """解析文本元数据"""
+        reel_numbers = set()
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+                matches = REEL_PATTERN.findall(content)
+                for match in matches:
+                    reel_numbers.add(match)
+                    self.log(f"从元数据提取卷号: {match}")
+        except Exception as e:
+            self.log(f"解析{filepath.name}错误: {e}")
+        return reel_numbers
+    
+    def _scan_volumes(self):
+        """扫描存储卷"""
+        volumes = {}
+        try:
+            for item in Path("/Volumes").iterdir():
+                if item.is_dir() and item.name != "Macintosh HD":
+                    volumes[item.name] = str(item)
+        except Exception as e:
+            self.log(f"扫描存储卷错误: {e}")
+        return volumes
+    
+    def refresh_volumes(self):
+        """初始化刷新存储卷"""
+        self.volume_paths = self._scan_volumes()
+        volumes = list(self.volume_paths.keys())
+        self.volume_combo['values'] = volumes
+        if volumes:
+            untitled = [v for v in volumes if "Untitled" in v]
+            self.selected_volume.set(untitled[0] if untitled else volumes[0])
+        self.set_step(0, 'done')
     
     # ===== 步骤1: 刷新 =====
     def do_refresh(self):
@@ -558,20 +563,11 @@ class CardRenamerApp:
         self.set_step(0, 'active')
         self.set_status("正在刷新...", busy=True)
         self.refresh_btn.config(state=tk.DISABLED)
-        
         threading.Thread(target=self._refresh_volumes, daemon=True).start()
     
     def _refresh_volumes(self):
         """后台刷新"""
-        self.volume_paths = {}
-        
-        try:
-            for item in Path("/Volumes").iterdir():
-                if item.is_dir() and item.name != "Macintosh HD":
-                    self.volume_paths[item.name] = str(item)
-        except Exception as e:
-            self.log(f"刷新错误: {e}")
-        
+        self.volume_paths = self._scan_volumes()
         volumes = list(self.volume_paths.keys())
         
         def update_ui():
@@ -586,23 +582,6 @@ class CardRenamerApp:
             self.refresh_btn.config(state=tk.NORMAL)
         
         self.root.after(0, update_ui)
-    
-    def refresh_volumes(self):
-        """初始刷新"""
-        self.volume_paths = {}
-        try:
-            for item in Path("/Volumes").iterdir():
-                if item.is_dir() and item.name != "Macintosh HD":
-                    self.volume_paths[item.name] = str(item)
-        except Exception:
-            pass
-        
-        volumes = list(self.volume_paths.keys())
-        self.volume_combo['values'] = volumes
-        if volumes:
-            untitled = [v for v in volumes if "Untitled" in v]
-            self.selected_volume.set(untitled[0] if untitled else volumes[0])
-        self.set_step(0, 'done')
     
     def on_volume_selected(self, event=None):
         """存储卡选择变更"""
@@ -638,12 +617,10 @@ class CardRenamerApp:
         volume_path = Path(f"/Volumes/{volume_name}")
         
         self.log(f"分析: {volume_name}")
-        
         self.video_files = []
-        reel_pattern = re.compile(r'^([A-Z]\d{3})')
         self.reel_numbers = set()
         
-        # 优先尝试从元数据文件提取卷号
+        # 优先提取元数据
         self.log("正在扫描元数据文件...")
         metadata_reels = self.extract_reel_from_metadata(volume_path)
         if metadata_reels:
@@ -652,17 +629,16 @@ class CardRenamerApp:
         else:
             self.log("未找到元数据文件，将从文件名提取")
         
-        # 扫描视频文件并从文件名提取卷号
+        # 扫描视频文件
         self.log("正在扫描视频文件...")
         try:
             for root, _, files in os.walk(volume_path):
                 for file in files:
-                    # 跳过隐藏文件（以.开头的文件，如._开头的macOS资源文件）
                     if file.startswith('.'):
                         continue
                     if Path(file).suffix.lower() in VIDEO_EXTENSIONS:
                         self.video_files.append(file)
-                        match = reel_pattern.match(file)
+                        match = REEL_PATTERN.match(file)
                         if match:
                             self.reel_numbers.add(match.group(1))
         except PermissionError:
@@ -670,14 +646,11 @@ class CardRenamerApp:
         except Exception as e:
             self.log(f"错误: {e}")
         
-        count = len(self.video_files)
-        self.log(f"找到 {count} 个视频文件")
-        
-        # 检查重复
+        self.log(f"找到 {len(self.video_files)} 个视频文件")
         duplicates = self.reel_numbers & self.reel_history
         
         def update_ui():
-            self.video_count_label.config(text=f"视频文件: {count} 个")
+            self.video_count_label.config(text=f"视频文件: {len(self.video_files)} 个")
             
             if self.reel_numbers:
                 sorted_reels = sorted(self.reel_numbers)
@@ -685,19 +658,15 @@ class CardRenamerApp:
                 self.reel_combo['values'] = sorted_reels
                 self.selected_reel.set(sorted_reels[0])
                 
-                # 显示重复警告
                 if duplicates:
                     dup_str = ', '.join(sorted(duplicates))
                     self.warning_label.config(text=f"⚠️ 已存在: {dup_str}")
                     self.log(f"警告: 卷号已存在于历史记录中: {dup_str}")
-                    # 仍然允许操作，但给予警告
-                    self.rename_btn.config(state=tk.NORMAL)
-                    self.eject_btn.config(state=tk.NORMAL)
                 else:
                     self.warning_label.config(text="")
-                    self.rename_btn.config(state=tk.NORMAL)
-                    self.eject_btn.config(state=tk.NORMAL)
                 
+                self.rename_btn.config(state=tk.NORMAL)
+                self.eject_btn.config(state=tk.NORMAL)
                 self.set_step(1, 'done')
                 self.set_status("分析完成", busy=False)
             else:
